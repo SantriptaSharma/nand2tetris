@@ -9,10 +9,23 @@
  *       0 otherwise
  */
 
+ /*
+    The above definition is equivalent to:
+    out =   0 if (a' AND b'), 1 otherwise
+    out = (a' AND b')' => out' = a' AND b'
+ */
+
 CHIP Or {
     IN a, b;
     OUT out;
 
     PARTS:
-    // Put your code here:
+    // Calculate a' and b'
+    Not(in = a, out = notA);
+    Not(in = b, out = notB);
+
+    // Calculate out'
+    And(a = notA, b = notB, out = notOut);
+
+    Not(in = notOut, out = out);
 }
