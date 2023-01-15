@@ -7,7 +7,11 @@
  * 8-way demultiplexor:
  * {a, b, c, d, e, f, g, h} = {in, 0, 0, 0, 0, 0, 0, 0} if sel == 000
  *                            {0, in, 0, 0, 0, 0, 0, 0} if sel == 001
- *                            etc.
+ *                            {0, 0, in, 0, 0, 0, 0, 0} if sel == 010
+ *                            {0, 0, 0, in, 0, 0, 0, 0} if sel == 011
+ *                            {0, 0, 0, 0, in, 0, 0, 0} if sel == 100
+ *                            {0, 0, 0, 0, 0, in, 0, 0} if sel == 101
+ *                            {0, 0, 0, 0, 0, 0, in, 0} if sel == 110
  *                            {0, 0, 0, 0, 0, 0, 0, in} if sel == 111
  */
 
@@ -16,5 +20,22 @@ CHIP DMux8Way {
     OUT a, b, c, d, e, f, g, h;
 
     PARTS:
-    // Put your code here:
+    DMux4Way(in = in, sel = sel[0..1], a = aMux, b = bMux, c = cMux, d = dMux);
+    DMux4Way(in = in, sel = sel[0..1], a = eMux, b = fMux, c = gMux, d = hMux);
+
+    // Alternate: Not + Xor
+
+    Nand(a = aMux, b = sel[2], out = aTemp);
+    Nand(a = bMux, b = sel[2], out = bTemp);
+    Nand(a = cMux, b = sel[2], out = cTemp);
+    Nand(a = dMux, b = sel[2], out = dTemp);
+    And(a = aMux, b = aTemp, out = a);
+    And(a = bMux, b = bTemp, out = b);
+    And(a = cMux, b = cTemp, out = c);
+    And(a = dMux, b = dTemp, out = d);
+
+    And(a = eMux, b = sel[2], out = e);
+    And(a = fMux, b = sel[2], out = f);
+    And(a = gMux, b = sel[2], out = g);
+    And(a = hMux, b = sel[2], out = h);
 }
