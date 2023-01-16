@@ -15,6 +15,5 @@ CHIP Bit {
 
     PARTS:
     Mux(a = last, b = in, sel = load, out = store);
-    DFF(in = store, out = last);
-    And(a = last, b = true, out = out);
+    DFF(in = store, out = last, out = out);
 }
