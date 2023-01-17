@@ -39,5 +39,31 @@ CHIP CPU {
         pc[15];          // address of next instruction
 
     PARTS:
-    // Put your code here:
+    Mux16(a[0..14] = instruction[0..14], a[15] = false, b = aluOutput, sel = instruction[15], out = aIn);
+    Not(in = instruction[15], out = aInstruction);
+    Or(a = aInstruction, b = instruction[5], out = aLoad);
+    ARegister(in = aIn, load = aLoad, out = aOut, out[0..14] = addressM);
+
+    And(a = instruction[15], b = instruction[4], out = dLoad);
+    DRegister(in = aluOutput, load = dLoad, out = dOut);
+    
+    // Figure out if the jump should actually happen based on the jump type
+    Not(in = cZero, out = cPosA);
+    Not(in = cNeg, out = cPosB);
+    And(a = cPosA, b = cPosB, out = cPos);
+
+    And(a = instruction[0], b = cPos, out = jPos);
+    And(a = instruction[1], b = cZero, out = jZero);
+    And(a = instruction[2], b = cNeg, out = jNeg);
+
+    Or(a = jPos, b = jZero, out = jumpFlagA);
+    Or(a = jumpFlagA, b = jNeg, out = jumpFlagB);
+    And(a = jumpFlagB, b = instruction[15], out = jumpFlag);
+
+    Not(in = jumpFlag, out = incrFlag);
+    PC(in = aOut, inc = incrFlag, reset = reset, load = jumpFlag, out[0..14] = pc);
+
+    Mux16(a = aOut, b = inM, sel = instruction[12], out = yIn);
+    ALU(x = dOut, y = yIn, zx = instruction[11], nx = instruction[10], zy = instruction[9], ny = instruction[8], f = instruction[7], no = instruction[6], out = aluOutput, out = outM, zr = cZero, ng = cNeg);
+    And(a = instruction[3], b = instruction[15], out = writeM);
 }
