@@ -1,5 +1,10 @@
 tools/
+.vscode/
 
 *.out
 *.tst
 *.cmp
+
+out.hack
+test.asm
+*.exe
