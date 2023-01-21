@@ -6,5 +6,6 @@ tools/
 *.cmp
 
 out.hack
-test.asm
+pruned.asm
+test*.asm
 *.exe

@@ -4,6 +4,7 @@
 #include <string>
 #include <bitset>
 #include <map>
+#include <vector>
 #include <cmath>
 
 #define MAX_ADDR 32767
@@ -12,13 +13,21 @@ using string = std::string;
 
 enum InstructionType
 {
-	ADDRESS, COMPUTATION, LABEL
-};
+	ADDRESS, COMPUTATION
+}; 
 
+/// Holds mappings from labels and variables to their addresses in memory
 std::map<string, uint32_t> symbolsTable;
-uint16_t lastUsed = 15;
 
-uint16_t ParseAddress(string &in, size_t lineNumber, string &error, bool &valid)
+/// Last used memory address for variables, starts at 15 due to the R0..R15 registers
+uint16_t lastUsedAddress = 15;
+
+/// Maps post-preprocessing lines to the original lines in the source code
+std::vector<size_t> lineNumberMapping;
+
+/// Parses a given A-type instruction into its equivalent hack machine code
+/// An A-type instruction is of the form @[15-bit immediate | label (alphanumerics + underscores)]
+uint16_t ParseAddress(string &in, size_t lineNumber, size_t instrNumber, string &error, bool &valid)
 {
 	if (in.length() == 1)
 	{
@@ -58,7 +67,7 @@ uint16_t ParseAddress(string &in, size_t lineNumber, string &error, bool &valid)
 			valid = false;
 			
 			std::stringstream errorText;
-			errorText << "Character " << c << " is not a digit, but token starts with a digit. Labels must start with an alphabet and only contain alphanumerical values or underscores";
+			errorText << "Character " << c << " is not a digit, but token starts with a digit";
 			error = errorText.str();
 		}
 		else if (type == LABELTOK && !(isalnum(c) || c == '_'))
@@ -99,83 +108,149 @@ uint16_t ParseAddress(string &in, size_t lineNumber, string &error, bool &valid)
 	{
 		if (symbolsTable.find(tok) != symbolsTable.end()) return symbolsTable.at(tok);
 
-		symbolsTable.insert({tok, ++lastUsed});
-		return lastUsed;
+		symbolsTable.insert({tok, ++lastUsedAddress});
+		return lastUsedAddress;
 	}
 }
 
-uint16_t ParseComputation(string &in, size_t lineNumber, string &error, bool &valid)
+/// Parses a C-type instruction into its equivalent hack machine code
+uint16_t ParseComputation(string &in, size_t lineNumber, size_t instrNumber, string &error, bool &valid)
 {
-	
+	std::bitset<16> output(0b1110000000000000);
+
+	std::stringstream parser(in), errorText;
+
+	string tok;
+
+	std::getline(parser, tok, '=');
+
+	if (!parser.eof())
+	{
+		for (char c : tok)
+		{
+			if (isspace(c)) continue;
+
+			switch (c)
+			{
+				case 'A':
+					if (output.test(5))
+					{
+						valid = false;
+						error = "A repeated in destination";
+					}
+
+					output.set(5, true);
+				break;
+
+				case 'D':
+					if (output.test(4))
+					{
+						valid = false;
+						error = "D repeated in destination";
+					}
+
+					output.set(4, true);
+				break;
+
+				case 'M':
+					if (output.test(3))
+					{
+						valid = false;
+						error = "M repeated in destination";
+					}
+
+					output.set(3, true);
+				break;
+
+				default:
+					valid = false;
+					errorText << "Invalid character " << c << " used as computation destination";
+					error = errorText.str();
+				break;					
+			}
+
+			if (!valid) break;
+		}
+	}
+
+	if (!valid)
+	{
+		errorText.str("");
+		errorText << "Malformed computation instruction on line " << lineNumber << ": " << (error.empty() ? "Syntax error" : error);
+		
+		error = errorText.str();
+		return 0;
+	}
+
+	return output.to_ulong();
 }
 
-uint16_t ParseLabel(string &in, size_t lineNumber, string &error, bool &valid)
-{
-	
-}
+/// Lookup table for parsing function based on the type of instruction (enum value => index), sorry for the horrific syntax
+uint16_t (*parseLUT[]) (string &in, size_t lineNumber, size_t instrNumber, string &error, bool &valid) = { ParseAddress, ParseComputation };
 
-uint16_t (*parseLUT[]) (string &in, size_t lineNumber, string &error, bool &valid) = { ParseAddress, ParseComputation, ParseLabel };
-
-uint16_t ParseStatement(string &in, size_t lineNumber, string &error, bool &valid)
+/// Identifies the type of a statement and parses it accordingly
+uint16_t ParseStatement(string &in, size_t lineNumber, size_t instrNumber, string &error, bool &valid)
 {	
 	InstructionType type = COMPUTATION;
 	uint16_t statement;
 	valid = true;
 	error = "";
 
-	size_t start = 0, end;
-	size_t len = in.length();
+	if (in[0] == '@') type = ADDRESS;
 
-	while (isspace(in[start]) && start < len) { start++; }
-
-	if (in[start] == '@')
-	{
-		type = ADDRESS;
-	}
-	else if (in[start] == '(')
-	{
-		type = LABEL;
-	}
-
-	size_t lastNonSpace = start;
-
-	for(end = start; end < len; end++)
-	{
-		char c = in[end];
-
-		if (c == '/')
-		{
-			if (end == len - 1 || in[end + 1] != '/')
-			{
-				std::stringstream errorMessage;
-				errorMessage << "Unexpected / on line " << lineNumber;
-
-				error = errorMessage.str();
-				valid = false;
-				return 0;
-			}
-
-			break;
-		}
-
-		if (!isspace(c)) lastNonSpace = end;
-	}
-
-	if (start == end)
-	{
-		valid = false;
-		return 0;
-	}
-
-	if (in[end] == '/') end--;
-
-	end = lastNonSpace;
-
-	string trimmedInstruction = in.substr(start, end - start + 1);
-
-	statement = parseLUT[type](trimmedInstruction, lineNumber, error, valid);
+	statement = parseLUT[type](in, lineNumber, instrNumber, error, valid);
 
 	return statement;
+}
+
+bool PreprocessLabel(const string &in, size_t instrNumber, string &error)
+{
+	std::stringstream errorBuilder;
+
+	if (!isalpha(in[0]))
+	{
+		errorBuilder << "First character" << in[0] << "is not alphabetical";
+		error = errorBuilder.str();
+		return false;
+	}
+
+	std::stringstream tokenBuilder;
+	char c;
+
+	for (size_t i = 0, len = in.length(); i < len; i++)
+	{
+		c = in[i];
+
+		if (c == ')') break;
+
+		if (!(isalnum(c) || c == '_'))
+		{
+			errorBuilder << "Character" << in[0] << "is not alphanumeric or an underscore";
+			error = errorBuilder.str();
+			return false;
+		}
+
+		tokenBuilder << c;
+	}
+
+	if (c != ')')
+	{
+		error = "Unclosed label";
+		return false;
+	}
+
+	string tok = tokenBuilder.str();
+
+	if (symbolsTable.find(tok) != symbolsTable.end())
+	{
+		errorBuilder << "Label" << tok << "already exists";
+		error = errorBuilder.str();
+		return false;
+	}
+
+	symbolsTable.insert({tok, instrNumber});
+
+	return true;
 }
 
 int main(const int argc, const char *argv[])
@@ -194,7 +269,10 @@ int main(const int argc, const char *argv[])
 		return 1;
 	}
 
-	std::ofstream output("out.hack");
+	std::ofstream output("out.hack"), pruned;
+
+	// Shows preprocessor output
+	if (argc > 2) pruned.open("pruned.asm");
 
 	if (!output.is_open())
 	{
@@ -202,6 +280,7 @@ int main(const int argc, const char *argv[])
 		return 1;
 	}
 
+	// Sets up symbols table with default symbols
 	symbolsTable.clear();
 	symbolsTable.insert({
 		{"R0", 0}, {"R1", 1}, {"R2", 2}, {"R3", 3}, {"R4", 4},
@@ -210,17 +289,101 @@ int main(const int argc, const char *argv[])
 		{"R14", 14}, {"R15", 15}, {"KBD", 32767}, {"SCREEN", 24576}
 	});
 
-	size_t lineNumber = 1;
+	size_t lineNumber = 1, instrNumber = 0;
+	std::stringstream source;
 
+	// Preprocessing: Removes empty lines, comments and catalogues labels.
 	while (!asmFile.eof())
 	{
 		string line, error;
 		std::getline(asmFile, line);
+
+		size_t start = 0, end = line.length();
+		while (start < end)
+		{
+			bool a = isspace(line[start]), b = isspace(line[end - 1]);
+			if (a) start++;
+			if (b) end--;
+
+			if (!(a || b)) break;
+		}
+
+		if (start == end) 
+		{
+			lineNumber++;
+			continue;
+		}
+
+		char first = line[start];
+
+		switch (first)
+		{
+			bool valid;
+
+			case '(':
+				valid = PreprocessLabel(line.substr(start + 1, end - start - 1), instrNumber, error);
+
+				if (!valid)
+				{
+					fprintf(stderr, "Malformed label on line %d: %s\n", lineNumber, error.c_str());
+					return 1;
+				}
+
+				lineNumber++;
+				continue;
+			break;
+
+			case '/':
+				valid = start + 1 != end && line[start + 1] == '/';
+
+				if (!valid)
+				{
+					fprintf(stderr, "Unexpected symbol on line %d: /\n", lineNumber);
+					return 1;
+				}
+
+				lineNumber++;
+				continue;
+			break;
+		}
+
+		size_t commStart;
+		if ((commStart = line.find('/')) != string::npos)
+		{
+			bool valid = commStart + 1 != end && line[commStart + 1] == '/';
+
+			if (!valid)
+			{
+				fprintf(stderr, "Unexpected symbol on line %d: /\n", lineNumber);
+				return 1;
+			}
+
+			// Refit end to remove comment from the line
+			for (end = commStart; end > start && isspace(line[end - 1]); end--) { };
+
+
+		}
+
+		string out = line.substr(start, end - start);
+
+		if (argc > 2) pruned << out << "\n";
+		source << out << "\n";
+		lineNumberMapping.push_back(lineNumber++);
+		instrNumber++;
+	}
+
+	lineNumber = instrNumber = 0;
+
+	while (!source.eof())
+	{
+		string line, error;
+		std::getline(source, line);
 		bool valid;
-		uint16_t statement = ParseStatement(line, lineNumber, error, valid);
+		uint16_t statement = ParseStatement(line, lineNumberMapping[lineNumber], instrNumber, error, valid);
 
 		if (valid)
 		{
+			instrNumber++;
 			std::bitset<16> bits(statement);
 			output << bits << std::endl;
 		}
