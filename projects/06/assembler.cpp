@@ -13,7 +13,7 @@ using string = std::string;
 
 enum InstructionType
 {
-	ADDRESS, COMPUTATION
+	INSTR_ADDR, INSTR_COMP
 }; 
 
 /// Holds mappings from labels and variables to their addresses in memory
@@ -55,14 +55,14 @@ uint16_t ParseAddress(string &in, size_t lineNumber, size_t instrNumber, string 
 
 	enum TokenType
 	{
-		LABELTOK, NUMTOK
-	} type = isdigit(tok[0]) ? NUMTOK : LABELTOK;
+		TOK_LBL, TOK_NUM
+	} type = isdigit(tok[0]) ? TOK_NUM : TOK_LBL;
 
 	for (auto c : tok)
 	{
 		if (!valid) break;
 		
-		if (type == NUMTOK && !isdigit(c))
+		if (type == TOK_NUM && !isdigit(c))
 		{
 			valid = false;
 			
@@ -70,7 +70,7 @@ uint16_t ParseAddress(string &in, size_t lineNumber, size_t instrNumber, string 
 			errorText << "Character " << c << " is not a digit, but token starts with a digit";
 			error = errorText.str();
 		}
-		else if (type == LABELTOK && !(isalnum(c) || c == '_'))
+		else if (type == TOK_LBL && !(isalnum(c) || c == '_'))
 		{
 			valid = false;
 
@@ -89,7 +89,7 @@ uint16_t ParseAddress(string &in, size_t lineNumber, size_t instrNumber, string 
 		return 0;
 	}
 
-	if (type == NUMTOK)
+	if (type == TOK_NUM)
 	{
 		int val = std::stoi(tok);
 		if (val > MAX_ADDR)
@@ -191,12 +191,12 @@ uint16_t (*parseLUT[]) (string &in, size_t lineNumber, size_t instrNumber, strin
 /// Identifies the type of a statement and parses it accordingly
 uint16_t ParseStatement(string &in, size_t lineNumber, size_t instrNumber, string &error, bool &valid)
 {	
-	InstructionType type = COMPUTATION;
+	InstructionType type = INSTR_COMP;
 	uint16_t statement;
 	valid = true;
 	error = "";
 
-	if (in[0] == '@') type = ADDRESS;
+	if (in[0] == '@') type = INSTR_ADDR;
 
 	statement = parseLUT[type](in, lineNumber, instrNumber, error, valid);
 
