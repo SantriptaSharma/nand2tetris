@@ -5,6 +5,8 @@
 #include <bitset>
 #include <map>
 #include <vector>
+#include <array>
+#include <algorithm>
 #include <cmath>
 
 #define MAX_ADDR 32767
@@ -14,10 +16,20 @@ using string = std::string;
 enum InstructionType
 {
 	INSTR_ADDR, INSTR_COMP
-}; 
+};
+
+const std::array<char, 10> computationCharset = { 'A', 'M', 'D', '-', '+', '&', '|', '!', '1', '0' };
+const std::array<string, 7> jumpTypes = {"JGT", "JEQ", "JGE", "JLT", "JNE", "JLE", "JMP"};
+const std::array<char, 3> labelCharacters = { '_', '.', '$' };
 
 /// Holds mappings from labels and variables to their addresses in memory
-std::map<string, uint32_t> symbolsTable;
+std::map<string, uint32_t> symbolsTable = {
+		{"R0", 0}, {"R1", 1}, {"R2", 2}, {"R3", 3}, {"R4", 4},
+		{"R5", 5}, {"R6", 6}, {"R7", 7}, {"R8", 8}, {"R9", 9},
+		{"R10", 10}, {"R11", 11}, {"R12", 12}, {"R13", 13},
+		{"R14", 14}, {"R15", 15}, {"KBD", 32767}, {"SCREEN", 16384}
+	};
+
 
 /// Last used memory address for variables, starts at 15 due to the R0..R15 registers
 uint16_t lastUsedAddress = 15;
@@ -26,7 +38,7 @@ uint16_t lastUsedAddress = 15;
 std::vector<size_t> lineNumberMapping;
 
 /// Parses a given A-type instruction into its equivalent hack machine code
-/// An A-type instruction is of the form @[15-bit immediate | label (alphanumerics + underscores)]
+/// An A-type instruction is of the form @[15-bit immediate | label]
 uint16_t ParseAddress(string &in, size_t lineNumber, size_t instrNumber, string &error, bool &valid)
 {
 	if (in.length() == 1)
@@ -70,12 +82,12 @@ uint16_t ParseAddress(string &in, size_t lineNumber, size_t instrNumber, string 
 			errorText << "Character " << c << " is not a digit, but token starts with a digit";
 			error = errorText.str();
 		}
-		else if (type == TOK_LBL && !(isalnum(c) || c == '_'))
+		else if (type == TOK_LBL && !(isalnum(c) || std::find(labelCharacters.begin(), labelCharacters.end(), c) != labelCharacters.end()))
 		{
 			valid = false;
 
 			std::stringstream errorText;
-			errorText << "Character " << c << " is not alphanumerical or an underscore";
+			errorText << "Character " << c << " is not a valid label symbol";
 			error = errorText.str();
 		}
 	}
@@ -173,6 +185,281 @@ uint16_t ParseComputation(string &in, size_t lineNumber, size_t instrNumber, str
 		}
 	}
 
+	if (parser.eof())
+	{
+		parser.clear();
+		parser.seekg(0);
+	}
+
+	std::getline(parser, tok, ';');
+
+	// This flag encodes the appearance of the M register in the computation
+	bool useMemory = false;
+	std::vector<char> cTokens;
+
+	auto charsetBegin = computationCharset.begin(), charsetEnd = computationCharset.end();
+	if (valid) for (auto c : tok)
+	{
+		if (isspace(c)) continue;
+
+		if (std::find(charsetBegin, charsetEnd, c) == charsetEnd)
+		{
+			errorText << "Unexpected symbol " << c << " in computation";
+
+			error = errorText.str();
+			valid = false;
+			break;
+		}
+
+		if (c == 'M') useMemory = true;
+		if (useMemory && c == 'A')
+		{
+			error = "Computation cannot use both the A and M registers";
+			valid = false;
+			break;
+		}
+		cTokens.push_back(c);
+	}
+
+	size_t cTokenCount = cTokens.size();
+
+	if (cTokenCount < 1)
+	{
+		error = "Empty computation";
+		valid = false;
+	}
+
+	if (valid && !parser.eof())
+	{
+		parser >> tok;
+
+		auto jBegin = jumpTypes.begin(), jEnd = jumpTypes.end();
+		bool eof = parser.eof();
+		std::array<string, 7>::const_iterator position;
+
+		if (!eof || (position = std::find(jBegin, jEnd, tok)) == jEnd)
+		{
+			if (eof) parser >> tok;
+
+			errorText << "Unexpected symbol " << tok << " after jump type";
+			error = errorText.str();
+			valid = false;
+		}
+		else
+		{
+			size_t index = position - jBegin;
+			std::bitset<3> jumpBits(index + 1);
+
+			output[0] = jumpBits[0];
+			output[1] = jumpBits[1];
+			output[2] = jumpBits[2];
+		}
+	}
+
+	enum OPERATION {
+		NOOP, NEG, NOT, ADD, SUB, AND, OR
+	} opType;
+
+	std::bitset<6> opcode(0);
+
+	output[12] = useMemory;
+
+	if (cTokenCount == 1) opType = NOOP;
+	else if (valid)
+	{
+		if (cTokens[0] == '-') opType = NEG;
+		else if (cTokens[0] == '!') opType = NOT;
+		else if (cTokens[1] == '+') opType = ADD;
+		else if (cTokens[1] == '-') opType = SUB;
+		else if (cTokens[1] == '&') opType = AND;
+		else if (cTokens[1] == '|') opType = OR;
+		else 
+		{
+			error = "Could not evaluate computation";
+			valid = false;
+		}
+	}
+
+	if (valid && (opType == NEG || opType == NOT) && cTokenCount != 2)
+	{
+		error = "Unary operator cannot have more than 2 operands";
+		valid = false;
+	}
+	else if (valid && (opType == ADD || opType == SUB || opType == AND || opType == OR) && cTokenCount != 3)
+	{
+		error = "Binary operator must have exactly 2 operands";
+		valid = false;
+	}
+
+	if (valid) switch (opType)
+	{
+		char a, b;
+
+		case NEG:
+			a = cTokens[1];
+
+			switch (a)
+			{
+				case 'A':
+				case 'M':
+					opcode = 0b110011;
+				break;
+
+				case 'D':
+					opcode = 0b001111;
+				break;
+
+				case '1':
+					opcode = 0b111010;
+				break;
+
+				default:
+					errorText << "Invalid token " << a << " in negation operation";
+					error = errorText.str();
+					valid = false;
+				break;
+			}
+		break;
+
+		case NOT:
+			a = cTokens[1];
+
+			switch (a)
+			{
+				case 'A':
+				case 'M':
+					opcode = 0b110001;
+				break;
+
+				case 'D':
+					opcode = 0b001101;
+				break;
+
+				default:
+					errorText << "Invalid token " << a << " in not operation";
+					error = errorText.str();
+					valid = false;
+				break;
+			}
+		break;
+
+		case ADD:
+			a = cTokens[0];
+			b = cTokens[2];
+
+			switch (a)
+			{
+				case 'D':
+					if (b == '1') opcode = 0b011111;
+					else if (b == 'A' || b == 'M') opcode = 0b000010;
+					else 
+					{
+						errorText << a << "is not a valid second operand for addition";
+						error = errorText.str();
+						valid = false;
+					}
+				break;
+
+				case 'A':
+				case 'M':
+					if (b == '1') opcode = 0b110111;
+					else 
+					{
+						errorText << a << "is not a valid second operand for addition";
+						error = errorText.str();
+						valid = false;
+					}
+				break;
+
+				default:
+					errorText << b << " is not a valid first operand for addition";
+					error = errorText.str();
+					valid = false;
+				break;
+			}
+		break;
+
+		case SUB:
+			a = cTokens[0];
+			b = cTokens[2];
+
+			switch (a)
+			{
+				case 'D':
+					if (b == '1') opcode = 0b001110;
+					else if (b == 'A' || b == 'M') opcode = 0b010011;
+					else 
+					{
+						errorText << a << "is not a valid second operand for subtraction";
+						error = errorText.str();
+						valid = false;
+					}
+				break;
+
+				case 'A':
+				case 'M':
+					if (b == '1') opcode = 0b110010;
+					else if (b == 'D') opcode = 0b000111;
+					else 
+					{
+						errorText << a << "is not a valid second operand for subtraction";
+						error = errorText.str();
+						valid = false;
+					}
+				break;
+
+				default:
+					errorText << b << " is not a valid first operand for subtraction";
+					error = errorText.str();
+					valid = false;
+				break;
+			}
+		break;
+
+		case AND:
+			a = cTokens[0];
+			b = cTokens[2];
+
+			if (a != 'D' && !(b == 'M' || b == 'A'))
+			{
+				errorText << b << " is not a valid second operand for binary and";
+				error = errorText.str();
+				valid = false;
+			}
+
+			opcode = 0b000000;
+		break;
+
+		case OR:
+			a = cTokens[0];
+			b = cTokens[2];
+
+			if (a != 'D' && !(b == 'M' || b == 'A'))
+			{
+				errorText << b << " is not a valid second operand for binary and";
+				error = errorText.str();
+				valid = false;
+			}
+
+			opcode = 0b010101;
+		break;
+
+		default:
+			a = cTokens[0];
+			if (!(a == '0' || a == '1' || a == 'D' || a == 'M' || a == 'A'))
+			{
+				errorText << a << " is not a valid constant symbol or register";
+				error = errorText.str();
+				valid = false;
+			}
+
+			if (a == '0') opcode = 0b101010;
+			else if (a == '1') opcode = 0b111111;
+			else if (a == 'D') opcode = 0b001100;
+			else if (a == 'A' || a == 'M') opcode = 0b110000;
+		break;
+	}
+	
 	if (!valid)
 	{
 		errorText.str("");
@@ -180,6 +467,12 @@ uint16_t ParseComputation(string &in, size_t lineNumber, size_t instrNumber, str
 		
 		error = errorText.str();
 		return 0;
+	}
+
+ 	for (int i = 0; i < 6; i++)
+	{
+		bool b = opcode[i];
+		output[i + 6] = b;
 	}
 
 	return output.to_ulong();
@@ -190,7 +483,7 @@ uint16_t (*parseLUT[]) (string &in, size_t lineNumber, size_t instrNumber, strin
 
 /// Identifies the type of a statement and parses it accordingly
 uint16_t ParseStatement(string &in, size_t lineNumber, size_t instrNumber, string &error, bool &valid)
-{	
+{
 	InstructionType type = INSTR_COMP;
 	uint16_t statement;
 	valid = true;
@@ -223,9 +516,9 @@ bool PreprocessLabel(const string &in, size_t instrNumber, string &error)
 
 		if (c == ')') break;
 
-		if (!(isalnum(c) || c == '_'))
+		if (!(isalnum(c) || std::find(labelCharacters.begin(), labelCharacters.end(), c) != labelCharacters.end()))
 		{
-			errorBuilder << "Character" << in[0] << "is not alphanumeric or an underscore";
+			errorBuilder << "Character " << c << " is not a valid label symbol";
 			error = errorBuilder.str();
 			return false;
 		}
@@ -279,15 +572,6 @@ int main(const int argc, const char *argv[])
 		fprintf(stderr, "Could not create output file.\n");
 		return 1;
 	}
-
-	// Sets up symbols table with default symbols
-	symbolsTable.clear();
-	symbolsTable.insert({
-		{"R0", 0}, {"R1", 1}, {"R2", 2}, {"R3", 3}, {"R4", 4},
-		{"R5", 5}, {"R6", 6}, {"R7", 7}, {"R8", 8}, {"R9", 9},
-		{"R10", 10}, {"R11", 11}, {"R12", 12}, {"R13", 13},
-		{"R14", 14}, {"R15", 15}, {"KBD", 32767}, {"SCREEN", 24576}
-	});
 
 	size_t lineNumber = 1, instrNumber = 0;
 	std::stringstream source;
@@ -360,8 +644,6 @@ int main(const int argc, const char *argv[])
 
 			// Refit end to remove comment from the line
 			for (end = commStart; end > start && isspace(line[end - 1]); end--) { };
-
-
 		}
 
 		string out = line.substr(start, end - start);
@@ -378,6 +660,7 @@ int main(const int argc, const char *argv[])
 	{
 		string line, error;
 		std::getline(source, line);
+		if (line.length() == 0) break;
 		bool valid;
 		uint16_t statement = ParseStatement(line, lineNumberMapping[lineNumber], instrNumber, error, valid);
 
